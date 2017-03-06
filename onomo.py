@@ -16,7 +16,7 @@ TODO: toaster popups for windows & mac
 TODO: pomo/break countdown
 """
 
-
+VERSION_NUMBER = 1,0,0
 DEFAULT_POMO_MINS = 25
 DEFAULT_SHORT_MINS = 5
 DEFAULT_LONG_MINS = 30
@@ -83,7 +83,7 @@ def make_sounder(filepath):
     return lambda: sound.play()
     
 
-ap = argparse.ArgumentParser(description=u"A simple timer for the Pomodoro working technique")
+ap = argparse.ArgumentParser(description=u"Onomo-Pomo: a simple timer for the Pomodoro working technique")
 ap.add_argument('-p','--pomomins',type=posnonz(float),default=DEFAULT_POMO_MINS,
                 help="Length of pomodoros in minutes. Defaults to {}".format(DEFAULT_POMO_MINS))
 ap.add_argument('-s','--shortmins',type=posnonz(float),default=DEFAULT_SHORT_MINS,
@@ -99,7 +99,13 @@ ap.add_argument('-m','--messageby',type=messagebys,default=DEFAULT_MESSAGE_BYS,
                 help="How to display message at the start of a pomodoro or break. "
                      "Comma-separated values from: {}. Defaults to \"{}\".".format(','.join(MESSAGE_BYS),
                      ','.join(DEFAULT_MESSAGE_BYS)))
+ap.add_argument('-v','--version',action="store_true",
+                help="Show version number and exit")
 args = ap.parse_args()
+
+if args.version:
+    print("Onomo-Pomo v{}".format('.'.join(map(str,VERSION_NUMBER))))
+    sys.exit()
 
 try:
     sounder = make_sounder(args.audiofile)
