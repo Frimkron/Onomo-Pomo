@@ -1,5 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
+import os.path
 import sys
 import time
 import simpleaudio
@@ -7,6 +8,7 @@ import argparse
 import notify2
 
 """ 
+TODO: starting pomo count parameter
 TODO: config file
 TODO: tray icon
 TODO: different start and end sounds
@@ -14,13 +16,14 @@ TODO: configurable pause between breaks/pomos
 TODO: ticking sound
 TODO: toaster popups for windows & mac
 TODO: pomo/break countdown
+TODO: store pomo count
 """
 
-VERSION_NUMBER = 1,0,0
+VERSION_NUMBER = 1,0,1
 DEFAULT_POMO_MINS = 25
 DEFAULT_SHORT_MINS = 5
 DEFAULT_LONG_MINS = 30
-DEFAULT_AUDIO_FILE = 'brring.wav'
+DEFAULT_AUDIO_FILE = os.path.join(os.path.dirname(__file__),'brring.wav')
 DEFAULT_LONG_PER = 4
 MESSAGE_BY_CONSOLE = 'console'
 MESSAGE_BY_DESKTOP = 'desktop'
@@ -69,7 +72,7 @@ def dur_format(seconds):
 def make_notifier(message_bys):
     notis = []
     if MESSAGE_BY_DESKTOP in message_bys:
-        notify2.init("Pomodoro")
+        notify2.init("Onomo-Pomo")
         notis.append(lambda m: notify2.Notification(m).show())
     if MESSAGE_BY_CONSOLE in message_bys:
         notis.append(lambda m: print(m))
