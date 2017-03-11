@@ -6,10 +6,11 @@ import time
 import simpleaudio
 import argparse
 import notify2
+import configparser
+from collections import namedtuple, OrderedDict
 
 """ 
 TODO: starting pomo count parameter
-TODO: config file
 TODO: tray icon
 TODO: different start and end sounds
 TODO: configurable pause between breaks/pomos
@@ -19,7 +20,7 @@ TODO: pomo/break countdown
 TODO: store pomo count
 """
 
-VERSION_NUMBER = 1,0,1
+VERSION_NUMBER = 1,1,0
 DEFAULT_POMO_MINS = 25
 DEFAULT_SHORT_MINS = 5
 DEFAULT_LONG_MINS = 30
@@ -29,6 +30,15 @@ MESSAGE_BY_CONSOLE = 'console'
 MESSAGE_BY_DESKTOP = 'desktop'
 MESSAGE_BYS = MESSAGE_BY_CONSOLE, MESSAGE_BY_DESKTOP
 DEFAULT_MESSAGE_BYS = MESSAGE_BY_CONSOLE, MESSAGE_BY_DESKTOP
+DEFAULT_CONFIG_FILE = os.path.join(os.path.expanduser('~'),'.onomo-pomo')
+CONFIG_SECTION_MAIN = 'main'
+
+ConfigVar = namedtuple('ConfigVar','longname shortname validator defaultval description')
+
+
+class NameSet(tuple):
+    def __str__(self):
+        return ','.join(map(str,self))
 
 
 def posnonz(func):
@@ -39,15 +49,33 @@ def posnonz(func):
         return v
     wrapper.__name__ = func.__name__
     return wrapper
-    
-    
-def messagebys(value):
-    vals = list(map(str.strip,value.split(',')))
-    for v in vals:
-        if v not in MESSAGE_BYS:
+
+
+def nameset(values):
+    def validator(val):
+        parts = [str.strip(p) for p in val.split(',')]
+        if not all([p in values for p in parts]):
             raise ValueError()
-    return vals
+        return NameSet(parts)
+    validator.__name__ = 'nameset'
+    return validator
     
+
+CONFIG_VARS = [ConfigVar(*args) for args in [
+    ('pomomins',  'p', posnonz(float),       25, 
+                'Length of Pomodoros in minutes.'),
+    ('shortmins', 's', posnonz(float),       5,  
+                'Length of short breaks in minutes.'),
+    ('longmins',  'l', posnonz(float),       30, 
+                'Length of long breaks in minutes.'),
+    ('audiofile', 'a', str,                  os.path.join(os.path.abspath(os.path.dirname(__file__)),'brring.wav'),
+                'Audio file to play at the end of a pomodoro or break.'),
+    ('longper',   'n', posnonz(int),         4,  
+                'Number of pomodoros between long breaks.'),
+    ('messageby', 'm', nameset(MESSAGE_BYS), NameSet((MESSAGE_BY_CONSOLE,MESSAGE_BY_DESKTOP)),
+                'How to display message at the start of a pomodoro or break.'),
+]]
+
     
 def product(v):
     n = v.pop(0)
@@ -87,48 +115,67 @@ def make_sounder(filepath):
     
 
 ap = argparse.ArgumentParser(description=u"Onomo-Pomo: a simple timer for the Pomodoro working technique")
-ap.add_argument('-p','--pomomins',type=posnonz(float),default=DEFAULT_POMO_MINS,
-                help="Length of pomodoros in minutes. Defaults to {}".format(DEFAULT_POMO_MINS))
-ap.add_argument('-s','--shortmins',type=posnonz(float),default=DEFAULT_SHORT_MINS,
-                help="Length of short breaks in minutes. Defaults to {}".format(DEFAULT_SHORT_MINS))
-ap.add_argument('-l','--longmins',type=posnonz(float),default=DEFAULT_LONG_MINS,
-                help="Length of long breaks in minutes. Defaults to {}".format(DEFAULT_LONG_MINS))
-ap.add_argument('-a','--audiofile',default=DEFAULT_AUDIO_FILE,nargs='?',
-                help="Audio file to play at the end of a pomodoro or break. "
-                     "Defaults to \"{}\". Use \"\" for no audio".format(DEFAULT_AUDIO_FILE))
-ap.add_argument('-n','--longper',type=posnonz(int),default=DEFAULT_LONG_PER,
-                help="Number of pomodoros between long breaks. Defaults to {}".format(DEFAULT_LONG_PER))
-ap.add_argument('-m','--messageby',type=messagebys,default=DEFAULT_MESSAGE_BYS,
-                help="How to display message at the start of a pomodoro or break. "
-                     "Comma-separated values from: {}. Defaults to \"{}\".".format(','.join(MESSAGE_BYS),
-                     ','.join(DEFAULT_MESSAGE_BYS)))
-ap.add_argument('-v','--version',action="store_true",
-                help="Show version number and exit")
+for configvar in CONFIG_VARS:
+    ap.add_argument('-{}'.format(configvar.shortname),'--{}'.format(configvar.longname),type=configvar.validator,
+                    help='{} Defaults to {}'.format(configvar.description,configvar.defaultval))
+ap.add_argument('-c','--configfile', default=DEFAULT_CONFIG_FILE,
+                help="Config file to use. Defaults to {}".format(DEFAULT_CONFIG_FILE))
+ap.add_argument('-v','--version',action="store_true", help="Show version number and exit")
 args = ap.parse_args()
 
 if args.version:
     print("Onomo-Pomo v{}".format('.'.join(map(str,VERSION_NUMBER))))
     sys.exit()
 
-try:
-    sounder = make_sounder(args.audiofile)
-except IOError as e:
-    sys.exit("Error loading audio file \"{}\": {}".format(args.audiofile,str(e)))
+args.configfile = os.path.expanduser(args.configfile)
+if not os.path.exists(args.configfile):
+    os.makedirs(os.path.dirname(args.configfile), exist_ok=True)
+    fileconf = configparser.ConfigParser(allow_no_value=True)
+    fileconf[CONFIG_SECTION_MAIN] = OrderedDict()
+    for configvar in CONFIG_VARS:
+        fileconf[CONFIG_SECTION_MAIN]['\x23\x23 {}'.format(configvar.description)] = None
+        fileconf[CONFIG_SECTION_MAIN]['\x23 {} = {}\n'.format(configvar.longname, configvar.defaultval)] = None
+    with open(args.configfile,'w') as f:
+        fileconf.write(f)
 
-notifier = make_notifier(args.messageby)
+fileconf = configparser.ConfigParser()
+fileconf.read(args.configfile)
+
+conf = {}
+for configvar in CONFIG_VARS:
+    value = configvar.defaultval
+    filevalue = fileconf[CONFIG_SECTION_MAIN].get(configvar.longname,None)
+    if filevalue is not None:
+        try:
+            value = configvar.validator(filevalue)
+        except ValueError:
+            sys.exit("Invalid value \"{}\" for option \"{}\" in config file \"{}\"".format(
+                     filevalue,configvar.longname,args.configfile))
+    argvalue = getattr(args,configvar.longname)
+    if argvalue is not None:
+        value = argvalue
+    conf[configvar.longname] = value
+
+try:
+    sounder = make_sounder(conf['audiofile'])
+except IOError as e:
+    sys.exit("Error loading audio file \"{}\": {}".format(conf['audiofile'],str(e)))
+
+notifier = make_notifier(conf['messageby'])
 
 checks = 0
 
 while True:
-    notifier("Pomodoro ({} - {} more until long break)".format(dur_format(args.pomomins*60),args.longper-(checks+1)))
-    time.sleep(args.pomomins*60)
+    notifier("Pomodoro ({} - {} more until long break)".format(
+            dur_format(conf['pomomins']*60), conf['longper']-(checks+1)))
+    time.sleep(conf['pomomins']*60)
     sounder()
     checks += 1
-    if checks >= args.longper:
-        notifier("Long break ({})".format(dur_format(args.longmins*60)))
-        time.sleep(args.longmins*60)
+    if checks >= conf['longper']:
+        notifier("Long break ({})".format(dur_format(conf['longmins']*60)))
+        time.sleep(conf['longmins']*60)
         checks = 0
     else:
-        notifier("Short break ({})".format(dur_format(args.shortmins*60)))
-        time.sleep(args.shortmins*60)
+        notifier("Short break ({})".format(dur_format(conf['shortmins']*60)))
+        time.sleep(conf['shortmins']*60)
     sounder()
