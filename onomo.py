@@ -13,11 +13,15 @@ from collections import namedtuple, OrderedDict
 TODO: starting pomo count parameter
 TODO: tray icon
 TODO: different start and end sounds
-TODO: configurable pause between breaks/pomos
-TODO: ticking sound
 TODO: toaster popups for windows & mac
 TODO: pomo/break countdown
 TODO: store pomo count
+TODO: break end warning notification
+TODO: break end warning sound
+TODO: confirm state change option
+TODO: pause on state change option
+TODO: speaker beep sound option
+TODO: run custom command on state start/end
 """
 
 VERSION_NUMBER = 1,2,0
@@ -26,8 +30,9 @@ MESSAGE_BY_DESKTOP = 'desktop'
 MESSAGE_BYS = MESSAGE_BY_CONSOLE, MESSAGE_BY_DESKTOP
 DEFAULT_CONFIG_FILE = os.path.join(os.path.expanduser('~'),'.config','onomo.conf')
 CONFIG_SECTION_MAIN = 'main'
+OWN_DIR = os.path.abspath(os.path.dirname(__file__))
 
-ConfigVar = namedtuple('ConfigVar','longname shortname validator defaultval description')
+ConfigVar = namedtuple('ConfigVar','longname shortname validator default suggested description')
 
 
 class NameSet(tuple):
@@ -56,17 +61,21 @@ def nameset(values):
     
 
 CONFIG_VARS = [ConfigVar(*args) for args in [
-    ('pomomins',  'p', posnonz(float),       25, 
+    ('pomomins',  'p', posnonz(float),       25,   None,
                 'Length of Pomodoros in minutes.'),
-    ('shortmins', 's', posnonz(float),       5,  
+    ('shortmins', 's', posnonz(float),       5,    None,
                 'Length of short breaks in minutes.'),
-    ('longmins',  'l', posnonz(float),       30, 
+    ('longmins',  'l', posnonz(float),       30,   None,
                 'Length of long breaks in minutes.'),
-    ('audiofile', 'a', str,                  os.path.join(os.path.abspath(os.path.dirname(__file__)),'brring.wav'),
+    ('alertsound','a', str,                  os.path.join(OWN_DIR,'brring.wav'),None,
                 'Audio file to play at the end of a pomodoro or break.'),
-    ('longper',   'n', posnonz(int),         4,  
+    ('pomosound',None, str,                  '', os.path.join(OWN_DIR,'ticktock.wav'),
+                'Audio file to loop during a Pomodoro.'),
+    ('breaksound',None,str,                  '', os.path.join(OWN_DIR,'ticktock.wav'),
+                'Audio file to loop during a break.'),
+    ('longper',   'n', posnonz(int),         4,    None,
                 'Number of pomodoros between long breaks.'),
-    ('messageby', 'm', nameset(MESSAGE_BYS), NameSet((MESSAGE_BY_CONSOLE,MESSAGE_BY_DESKTOP)),
+    ('messageby', 'm', nameset(MESSAGE_BYS), NameSet((MESSAGE_BY_CONSOLE,MESSAGE_BY_DESKTOP)), None,
                 'How to display message at the start of a pomodoro or break.'),
 ]]
 
@@ -105,13 +114,40 @@ def make_sounder(filepath):
     if not filepath:
         return lambda: None
     sound = simpleaudio.WaveObject.from_wave_file(filepath)
-    return lambda: sound.play()
+    def sounder():
+        play = sound.play()
+        play.wait_done()
+    return sounder
+    
+    
+def make_timer(mins,soundpath):
+    if soundpath:
+        sound = simpleaudio.WaveObject.from_wave_file(soundpath)
+        def timer():
+            starttime = time.time()
+            while time.time()-starttime < mins*60:
+                play = sound.play()
+                play.wait_done()
+        return timer
+    else:
+        return lambda: time.sleep(mins*60)
+    
+
+def sound_file_error_quit(e):
+    sys.exit("Error loading audio file: {}".format(str(e)))
     
 
 ap = argparse.ArgumentParser(description=u"Onomo-Pomo: a simple timer for the Pomodoro working technique")
 for configvar in CONFIG_VARS:
-    ap.add_argument('-{}'.format(configvar.shortname),'--{}'.format(configvar.longname),type=configvar.validator,
-                    help='{} Defaults to {}'.format(configvar.description,configvar.defaultval))
+    argargs = ['--{}'.format(configvar.longname)]
+    argkwargs = {
+        'type': configvar.validator, 
+        'help': '{} Defaults to "{}"'.format(configvar.description,configvar.default), 
+    }
+    if configvar.shortname:
+        argargs.insert(0, '-{}'.format(configvar.shortname))
+    ap.add_argument(*argargs, **argkwargs)
+    
 ap.add_argument('-c','--configfile', default=DEFAULT_CONFIG_FILE,
                 help="Config file to use. Defaults to {}".format(DEFAULT_CONFIG_FILE))
 ap.add_argument('-v','--version',action="store_true", help="Show version number and exit")
@@ -127,8 +163,9 @@ if not os.path.exists(args.configfile):
     fileconf = configparser.ConfigParser(allow_no_value=True)
     fileconf[CONFIG_SECTION_MAIN] = OrderedDict()
     for configvar in CONFIG_VARS:
+        suggested = configvar.suggested if configvar.suggested is not None else configvar.default
         fileconf[CONFIG_SECTION_MAIN]['\x23\x23 {}'.format(configvar.description)] = None
-        fileconf[CONFIG_SECTION_MAIN]['\x23 {} = {}\n'.format(configvar.longname, configvar.defaultval)] = None
+        fileconf[CONFIG_SECTION_MAIN]['\x23 {} = {}\n'.format(configvar.longname, suggested)] = None
     with open(args.configfile,'w') as f:
         fileconf.write(f)
 
@@ -137,7 +174,7 @@ fileconf.read(args.configfile)
 
 conf = {}
 for configvar in CONFIG_VARS:
-    value = configvar.defaultval
+    value = configvar.default
     filevalue = fileconf[CONFIG_SECTION_MAIN].get(configvar.longname,None)
     if filevalue is not None:
         try:
@@ -151,25 +188,46 @@ for configvar in CONFIG_VARS:
     conf[configvar.longname] = value
 
 try:
-    sounder = make_sounder(conf['audiofile'])
+    sounder = make_sounder(conf['alertsound'])
 except IOError as e:
-    sys.exit("Error loading audio file \"{}\": {}".format(conf['audiofile'],str(e)))
+    sound_file_error_quit(e)
 
 notifier = make_notifier(conf['messageby'])
+
+try:
+    pomo_timer = make_timer(conf['pomomins'],conf['pomosound'])
+except IOError as e:
+    sound_file_error_quit(e)
+
+try:
+    short_timer = make_timer(conf['shortmins'],conf['breaksound'])
+except IOError as e:
+    sound_file_error_quit(e)
+
+try:
+    long_timer = make_timer(conf['longmins'],conf['breaksound'])
+except IOError as e:
+    sound_file_error_quit(e)
 
 checks = 0
 
 while True:
+
+    # Pomodoro
     notifier("Pomodoro ({} - {} more until long break)".format(
-            dur_format(conf['pomomins']*60), conf['longper']-(checks+1)))
-    time.sleep(conf['pomomins']*60)
+            dur_format(conf['pomomins']*60), conf['longper']-(checks+1)))            
+    pomo_timer()        
     sounder()
     checks += 1
-    if checks >= conf['longper']:
+    
+    # Break
+    if checks >= conf['longper']:    
         notifier("Long break ({})".format(dur_format(conf['longmins']*60)))
-        time.sleep(conf['longmins']*60)
+        long_timer()
         checks = 0
-    else:
+        
+    else:    
         notifier("Short break ({})".format(dur_format(conf['shortmins']*60)))
-        time.sleep(conf['shortmins']*60)
+        short_timer()
+        
     sounder()
