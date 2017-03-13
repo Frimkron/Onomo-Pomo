@@ -20,11 +20,11 @@ TODO: pomo/break countdown
 TODO: store pomo count
 """
 
-VERSION_NUMBER = 1,1,0
+VERSION_NUMBER = 1,2,0
 MESSAGE_BY_CONSOLE = 'console'
 MESSAGE_BY_DESKTOP = 'desktop'
 MESSAGE_BYS = MESSAGE_BY_CONSOLE, MESSAGE_BY_DESKTOP
-DEFAULT_CONFIG_FILE = os.path.join(os.path.expanduser('~'),'.onomo-pomo')
+DEFAULT_CONFIG_FILE = os.path.join(os.path.expanduser('~'),'.config','onomo.conf')
 CONFIG_SECTION_MAIN = 'main'
 
 ConfigVar = namedtuple('ConfigVar','longname shortname validator defaultval description')
